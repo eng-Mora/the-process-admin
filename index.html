@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🛡️ Admin Panel - The Process</title>
+    <title>🛡️ لوحة تحكم المشرف - The Process</title>
     <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" />
 
@@ -117,8 +117,16 @@
                         </span>
                     </td>
                     <td>
+                        <span class="status-badge ${student.banned ? 'banned' : 'active'}">
+                            ${student.banned ? '🚫 محظور' : '✅ نشط'}
+                        </span>
+                    </td>
+                    <td>
                         <button class="btn-edit" onclick="editStudent('${code}')">
                             <i class="fas fa-edit"></i>
+                        </button>
+                        <button class="${student.banned ? 'btn-unban' : 'btn-ban'}" onclick="toggleBan('${code}', '${student.name}', ${student.banned ? 'true' : 'false'})">
+                            <i class="fas ${student.banned ? 'fa-unlock' : 'fa-ban'}"></i>
                         </button>
                         <button class="btn-delete" onclick="deleteStudent('${code}', '${student.name}')">
                             <i class="fas fa-trash"></i>
@@ -229,6 +237,17 @@
                         showToast('🗑️ تم حذف الطالب!', 'warning');
                     });
             };
+        };
+
+        // ===== Ban / Unban Student =====
+        window.toggleBan = function(code, name, isBanned) {
+            const action = isBanned ? 'إلغاء حظر' : 'حظر';
+            const icon   = isBanned ? '🔓' : '🚫';
+            if (!confirm(`${icon} هتعمل ${action} للطالب "${name}" (${code})؟`)) return;
+            const studentRef = ref(db, `students/${code}`);
+            update(studentRef, { banned: !isBanned })
+                .then(() => showToast(isBanned ? `✅ تم إلغاء حظر ${name}` : `🚫 تم حظر ${name}`, isBanned ? 'success' : 'warning'))
+                .catch(err => alert('❌ خطأ: ' + err.message));
         };
 
         window.closeConfirm = function() {
@@ -595,6 +614,27 @@
             transition: all 0.2s;
             margin: 0 2px;
         }
+        .btn-ban {
+            background: #fff3cd; color: #856404; border: none;
+            padding: 0.4rem 0.7rem; border-radius: 8px; cursor: pointer;
+            font-size: 0.9rem; transition: background 0.2s;
+        }
+        .btn-ban:hover { background: #ffc107; color: #fff; }
+
+        .btn-unban {
+            background: #d4edda; color: #155724; border: none;
+            padding: 0.4rem 0.7rem; border-radius: 8px; cursor: pointer;
+            font-size: 0.9rem; transition: background 0.2s;
+        }
+        .btn-unban:hover { background: #28a745; color: #fff; }
+
+        .status-badge {
+            padding: 3px 10px; border-radius: 12px;
+            font-size: 0.8rem; font-weight: 700;
+        }
+        .status-badge.active  { background: #d4edda; color: #155724; }
+        .status-badge.banned  { background: #f8d7da; color: #721c24; }
+
         .btn-edit { background: #e8f4fd; color: #007bff; }
         .btn-edit:hover { background: #007bff; color: white; }
         .btn-delete { background: #fde8e8; color: var(--danger); }
@@ -810,6 +850,7 @@
                         <th>التليفون</th>
                         <th>الإيميل</th>
                         <th>القسم</th>
+                        <th>الحالة</th>
                         <th>إجراءات</th>
                     </tr>
                 </thead>
