@@ -7,10 +7,10 @@
     <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" />
 
-    <!-- Firebase SDK -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
         import { getDatabase, ref, set, push, remove, onValue, update } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
+        import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
 
         const firebaseConfig = {
             apiKey: "AIzaSyBXsX0v_7p8CHDFiTUm4XkQsoZIqGueAOk",
@@ -24,48 +24,70 @@
         };
 
         const app = initializeApp(firebaseConfig);
-        const db = getDatabase(app);
-
-        // ===== Admin Password =====
-        const ADMIN_PASSWORD = "mora.admin.2026";
+        const db  = getDatabase(app);
+        const auth = getAuth(app);
 
         // ===== State =====
         let allStudents = {};
         let editingCode = null;
+        let studentsListenerActive = false;
 
-        // ===== Auth =====
-        function checkAuth() {
-            const authed = sessionStorage.getItem('adminAuthed');
-            if (authed === 'yes') {
-                showPanel();
+        // ===== Firebase Auth — مراقبة حالة الدخول =====
+        onAuthStateChanged(auth, (user) => {
+            if (user) {
+                document.getElementById('authScreen').style.display = 'none';
+                document.getElementById('adminPanel').style.display = 'block';
+                document.getElementById('adminEmail').textContent = user.email;
+                if (!studentsListenerActive) {
+                    loadStudents();
+                    studentsListenerActive = true;
+                }
             } else {
                 document.getElementById('authScreen').style.display = 'flex';
                 document.getElementById('adminPanel').style.display = 'none';
+                studentsListenerActive = false;
             }
-        }
+        });
 
-        window.submitAuth = function() {
-            const pass = document.getElementById('adminPass').value;
-            if (pass === ADMIN_PASSWORD) {
-                sessionStorage.setItem('adminAuthed', 'yes');
-                showPanel();
-                loadStudents();
-            } else {
-                document.getElementById('authError').textContent = '❌ كلمة المرور غلط!';
+        // ===== Login =====
+        window.submitAuth = async function() {
+            const email = document.getElementById('adminEmail_input').value.trim();
+            const pass  = document.getElementById('adminPass').value;
+            const errEl = document.getElementById('authError');
+            const btn   = document.getElementById('loginBtn');
+
+            if (!email || !pass) {
+                errEl.textContent = '⚠️ أدخل الإيميل وكلمة المرور';
+                return;
+            }
+
+            btn.disabled = true;
+            btn.textContent = '...جاري الدخول';
+            errEl.textContent = '';
+
+            try {
+                await signInWithEmailAndPassword(auth, email, pass);
+                // onAuthStateChanged هيعمل الباقي
+            } catch (err) {
+                let msg = '❌ خطأ في تسجيل الدخول';
+                if (err.code === 'auth/invalid-credential' || err.code === 'auth/wrong-password' || err.code === 'auth/user-not-found') {
+                    msg = '❌ الإيميل أو كلمة المرور غلط!';
+                } else if (err.code === 'auth/too-many-requests') {
+                    msg = '⏳ محاولات كتير، انتظر شوية وحاول تاني';
+                } else if (err.code === 'auth/network-request-failed') {
+                    msg = '📶 مشكلة في الإنترنت';
+                }
+                errEl.textContent = msg;
+                btn.disabled = false;
+                btn.textContent = 'دخول';
                 document.getElementById('adminPass').value = '';
             }
         };
 
-        window.logout = function() {
-            sessionStorage.removeItem('adminAuthed');
-            location.reload();
+        // ===== Logout =====
+        window.logout = async function() {
+            await signOut(auth);
         };
-
-        function showPanel() {
-            document.getElementById('authScreen').style.display = 'none';
-            document.getElementById('adminPanel').style.display = 'block';
-            loadStudents();
-        }
 
         // ===== Load Students =====
         function loadStudents() {
@@ -91,18 +113,18 @@
 
             const entries = Object.entries(data);
             if (entries.length === 0) {
-                tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;padding:2rem;color:#888">لا يوجد طلاب بعد. ابدأ بإضافة طالب جديد 👆</td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;padding:2rem;color:#888">لا يوجد طلاب بعد. ابدأ بإضافة طالب جديد 👆</td></tr>`;
                 return;
             }
 
             entries.forEach(([code, student]) => {
                 const tr = document.createElement('tr');
-                const vcBadge = student.videoCode 
+                const vcBadge = student.videoCode
                     ? `<span style="background:#e8f4fd;color:#007bff;padding:2px 8px;border-radius:10px;font-size:0.8rem;font-weight:700">${student.videoCode}</span>`
                     : `<span style="background:#fde8e8;color:#dc3545;padding:2px 8px;border-radius:10px;font-size:0.8rem">غير محدد ⚠️</span>`;
                 tr.innerHTML = `
                     <td>
-                        <img src="${student.image || 'https://api.dicebear.com/7.x/bottts/svg?seed=' + code}" 
+                        <img src="${student.image || 'https://api.dicebear.com/7.x/bottts/svg?seed=' + code}"
                              alt="${student.name}" class="student-avatar"
                              onerror="this.src='https://api.dicebear.com/7.x/bottts/svg?seed=${code}'">
                     </td>
@@ -137,7 +159,7 @@
             });
         }
 
-        // ===== Add Student =====
+        // ===== Add / Edit Student =====
         window.openAddModal = function() {
             editingCode = null;
             document.getElementById('modalTitle').textContent = '➕ إضافة طالب جديد';
@@ -178,29 +200,18 @@
         };
 
         window.saveStudent = function() {
-            const code = document.getElementById('accessCode').value.trim();
-            const name = document.getElementById('studentName').value.trim();
-            const phone = document.getElementById('studentPhone').value.trim();
-            const email = document.getElementById('studentEmail').value.trim();
+            const code     = document.getElementById('accessCode').value.trim();
+            const name     = document.getElementById('studentName').value.trim();
+            const phone    = document.getElementById('studentPhone').value.trim();
+            const email    = document.getElementById('studentEmail').value.trim();
             const language = document.getElementById('studentLanguage').value;
-            const image = document.getElementById('studentImage').value.trim();
-            const welcome = document.getElementById('studentWelcome').value.trim();
-            const videoCode = document.getElementById('studentVideoCode').value.trim();
+            const image    = document.getElementById('studentImage').value.trim();
+            const welcome  = document.getElementById('studentWelcome').value.trim();
+            const videoCode= document.getElementById('studentVideoCode').value.trim();
 
-            if (!code || !name) {
-                document.getElementById('formError').textContent = '⚠️ كود الدخول والاسم مطلوبين!';
-                return;
-            }
-
-            if (!videoCode) {
-                document.getElementById('formError').textContent = '⚠️ كود الفيديو مطلوب! (CODE1, CODE2, ...)';
-                return;
-            }
-
-            if (!editingCode && allStudents[code]) {
-                document.getElementById('formError').textContent = '⚠️ الكود ده موجود بالفعل!';
-                return;
-            }
+            if (!code || !name) { document.getElementById('formError').textContent = '⚠️ كود الدخول والاسم مطلوبين!'; return; }
+            if (!videoCode)     { document.getElementById('formError').textContent = '⚠️ كود الفيديو مطلوب! (CODE1, CODE2, ...)'; return; }
+            if (!editingCode && allStudents[code]) { document.getElementById('formError').textContent = '⚠️ الكود ده موجود بالفعل!'; return; }
 
             const studentData = {
                 name,
@@ -214,54 +225,39 @@
                 updatedAt: Date.now()
             };
 
-            const studentRef = ref(db, `students/${code}`);
-            set(studentRef, studentData)
-                .then(() => {
-                    closeModal();
-                    showToast(editingCode ? '✅ تم تحديث الطالب!' : '✅ تم إضافة الطالب!');
-                })
-                .catch(err => {
-                    document.getElementById('formError').textContent = '❌ خطأ: ' + err.message;
-                });
+            set(ref(db, `students/${code}`), studentData)
+                .then(() => { closeModal(); showToast(editingCode ? '✅ تم تحديث الطالب!' : '✅ تم إضافة الطالب!'); })
+                .catch(err => { document.getElementById('formError').textContent = '❌ خطأ: ' + err.message; });
         };
 
-        // ===== Delete Student =====
+        // ===== Delete =====
         window.deleteStudent = function(code, name) {
             document.getElementById('confirmName').textContent = name + ' (' + code + ')';
             document.getElementById('confirmModal').style.display = 'flex';
             document.getElementById('confirmDeleteBtn').onclick = function() {
-                const studentRef = ref(db, `students/${code}`);
-                remove(studentRef)
-                    .then(() => {
-                        closeConfirm();
-                        showToast('🗑️ تم حذف الطالب!', 'warning');
-                    });
+                remove(ref(db, `students/${code}`))
+                    .then(() => { closeConfirm(); showToast('🗑️ تم حذف الطالب!', 'warning'); });
             };
         };
 
-        // ===== Ban / Unban Student =====
+        // ===== Ban / Unban =====
         window.toggleBan = function(code, name, isBanned) {
             const action = isBanned ? 'إلغاء حظر' : 'حظر';
             const icon   = isBanned ? '🔓' : '🚫';
             if (!confirm(`${icon} هتعمل ${action} للطالب "${name}" (${code})؟`)) return;
-            const studentRef = ref(db, `students/${code}`);
-            update(studentRef, { banned: !isBanned })
+            update(ref(db, `students/${code}`), { banned: !isBanned })
                 .then(() => showToast(isBanned ? `✅ تم إلغاء حظر ${name}` : `🚫 تم حظر ${name}`, isBanned ? 'success' : 'warning'))
                 .catch(err => alert('❌ خطأ: ' + err.message));
         };
 
-        window.closeConfirm = function() {
-            document.getElementById('confirmModal').style.display = 'none';
-        };
+        window.closeConfirm = function() { document.getElementById('confirmModal').style.display = 'none'; };
 
         // ===== Search =====
         window.searchStudents = function() {
             const q = document.getElementById('searchInput').value.toLowerCase();
             const filtered = {};
             for (const [code, s] of Object.entries(allStudents)) {
-                if (s.name?.toLowerCase().includes(q) || code.includes(q) || s.phone?.includes(q)) {
-                    filtered[code] = s;
-                }
+                if (s.name?.toLowerCase().includes(q) || code.includes(q) || s.phone?.includes(q)) filtered[code] = s;
             }
             renderTable(filtered);
         };
@@ -272,9 +268,7 @@
             event.target.classList.add('active');
             if (!lang) { renderTable(allStudents); return; }
             const filtered = {};
-            for (const [code, s] of Object.entries(allStudents)) {
-                if (s.language === lang) filtered[code] = s;
-            }
+            for (const [code, s] of Object.entries(allStudents)) { if (s.language === lang) filtered[code] = s; }
             renderTable(filtered);
         };
 
@@ -290,14 +284,14 @@
         window.exportData = function() {
             const json = JSON.stringify(allStudents, null, 2);
             const blob = new Blob([json], { type: 'application/json' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
+            const url  = URL.createObjectURL(blob);
+            const a    = document.createElement('a');
             a.href = url;
             a.download = 'students_backup_' + new Date().toISOString().split('T')[0] + '.json';
             a.click();
         };
 
-        // ===== Import from old script =====
+        // ===== Import =====
         window.importBulk = function() {
             const raw = document.getElementById('bulkInput').value.trim();
             if (!raw) return;
@@ -305,40 +299,23 @@
                 const data = JSON.parse(raw);
                 const promises = [];
                 for (const [code, student] of Object.entries(data)) {
-                    const sRef = ref(db, `students/${code}`);
-                    promises.push(set(sRef, {
-                        ...student,
-                        createdAt: Date.now(),
-                        updatedAt: Date.now()
-                    }));
+                    promises.push(set(ref(db, `students/${code}`), { ...student, createdAt: Date.now(), updatedAt: Date.now() }));
                 }
                 Promise.all(promises).then(() => {
                     showToast(`✅ تم استيراد ${promises.length} طالب!`);
                     document.getElementById('bulkInput').value = '';
                     document.getElementById('importModal').style.display = 'none';
                 });
-            } catch (e) {
-                alert('❌ الداتا مش JSON صح!');
-            }
+            } catch (e) { alert('❌ الداتا مش JSON صح!'); }
         };
 
-        window.openImport = function() {
-            document.getElementById('importModal').style.display = 'flex';
-        };
-        window.closeImport = function() {
-            document.getElementById('importModal').style.display = 'none';
-        };
+        window.openImport  = function() { document.getElementById('importModal').style.display = 'flex'; };
+        window.closeImport = function() { document.getElementById('importModal').style.display = 'none'; };
 
-        // ===== Enter key for auth =====
+        // ===== Enter key =====
         document.addEventListener('keydown', function(e) {
-            if (e.key === 'Enter') {
-                const authScreen = document.getElementById('authScreen');
-                if (authScreen.style.display !== 'none') submitAuth();
-            }
+            if (e.key === 'Enter' && document.getElementById('authScreen').style.display !== 'none') submitAuth();
         });
-
-        // ===== Init =====
-        checkAuth();
     </script>
 
     <style>
@@ -379,13 +356,13 @@
             background: white;
             border-radius: 20px;
             padding: 3rem 2.5rem;
-            width: 380px;
+            width: 400px;
             text-align: center;
             box-shadow: 0 20px 60px rgba(0,0,0,0.4);
         }
 
         .auth-card h1 { color: var(--primary); margin-bottom: 0.5rem; font-size: 1.8rem; }
-        .auth-card p { color: var(--text-light); margin-bottom: 2rem; }
+        .auth-card p  { color: var(--text-light); margin-bottom: 2rem; }
 
         .auth-input {
             width: 100%;
@@ -396,8 +373,7 @@
             font-size: 1rem;
             margin-bottom: 1rem;
             direction: ltr;
-            text-align: center;
-            letter-spacing: 2px;
+            text-align: right;
             transition: border-color 0.3s;
         }
         .auth-input:focus { outline: none; border-color: var(--primary); }
@@ -415,8 +391,9 @@
             cursor: pointer;
             transition: background 0.3s;
         }
-        .auth-btn:hover { background: var(--primary-light); }
-        #authError { color: var(--danger); margin-top: 0.8rem; font-size: 0.9rem; }
+        .auth-btn:hover    { background: var(--primary-light); }
+        .auth-btn:disabled { background: #aaa; cursor: not-allowed; }
+        #authError { color: var(--danger); margin-top: 0.8rem; font-size: 0.9rem; min-height: 1.2rem; }
 
         /* ===== Admin Panel ===== */
         #adminPanel { display: none; }
@@ -435,6 +412,16 @@
         .header-title { font-size: 1.4rem; font-weight: 800; }
         .header-title span { color: var(--accent); }
 
+        .header-right { display: flex; align-items: center; gap: 1rem; }
+        .admin-email-badge {
+            background: rgba(255,255,255,0.15);
+            border: 1px solid rgba(255,255,255,0.25);
+            padding: 0.3rem 0.8rem;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            direction: ltr;
+        }
+
         .logout-btn {
             background: rgba(255,255,255,0.15);
             border: 1px solid rgba(255,255,255,0.3);
@@ -450,7 +437,6 @@
 
         .container { max-width: 1300px; margin: 0 auto; padding: 2rem; }
 
-        /* ===== Stats ===== */
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(3, 1fr);
@@ -474,7 +460,6 @@
         .stat-card:nth-child(3) .stat-number { color: #007bff; }
         .stat-label { color: var(--text-light); font-size: 0.9rem; margin-top: 0.4rem; }
 
-        /* ===== Controls ===== */
         .controls {
             background: var(--card);
             border-radius: 14px;
@@ -515,11 +500,7 @@
             font-size: 0.9rem;
             transition: all 0.2s;
         }
-        .filter-btn.active, .filter-btn:hover {
-            background: var(--primary);
-            color: white;
-            border-color: var(--primary);
-        }
+        .filter-btn.active, .filter-btn:hover { background: var(--primary); color: white; border-color: var(--primary); }
 
         .actions { margin-right: auto; display: flex; gap: 0.7rem; }
 
@@ -553,7 +534,6 @@
         }
         .btn-secondary:hover { background: #3d5166; }
 
-        /* ===== Table ===== */
         .table-card {
             background: var(--card);
             border-radius: 14px;
@@ -574,7 +554,6 @@
 
         tbody tr { border-bottom: 1px solid var(--border); transition: background 0.15s; }
         tbody tr:hover { background: #fef9f9; }
-
         tbody td { padding: 0.8rem; font-size: 0.9rem; vertical-align: middle; }
 
         .student-avatar {
@@ -596,51 +575,25 @@
 
         .email-text { font-size: 0.8rem; color: var(--text-light); }
 
-        .lang-badge {
-            padding: 0.25rem 0.7rem;
-            border-radius: 20px;
-            font-size: 0.8rem;
-            font-weight: 600;
-        }
-        .lang-badge.arabic { background: #fff3cd; color: #856404; }
+        .lang-badge { padding: 0.25rem 0.7rem; border-radius: 20px; font-size: 0.8rem; font-weight: 600; }
+        .lang-badge.arabic   { background: #fff3cd; color: #856404; }
         .lang-badge.language { background: #cce5ff; color: #004085; }
 
-        .btn-edit, .btn-delete {
-            border: none;
-            padding: 0.4rem 0.7rem;
-            border-radius: 7px;
-            cursor: pointer;
-            font-size: 0.85rem;
-            transition: all 0.2s;
-            margin: 0 2px;
-        }
-        .btn-ban {
-            background: #fff3cd; color: #856404; border: none;
-            padding: 0.4rem 0.7rem; border-radius: 8px; cursor: pointer;
-            font-size: 0.9rem; transition: background 0.2s;
-        }
+        .btn-edit, .btn-delete { border: none; padding: 0.4rem 0.7rem; border-radius: 7px; cursor: pointer; font-size: 0.85rem; transition: all 0.2s; margin: 0 2px; }
+        .btn-ban   { background: #fff3cd; color: #856404; border: none; padding: 0.4rem 0.7rem; border-radius: 8px; cursor: pointer; font-size: 0.9rem; transition: background 0.2s; }
         .btn-ban:hover { background: #ffc107; color: #fff; }
-
-        .btn-unban {
-            background: #d4edda; color: #155724; border: none;
-            padding: 0.4rem 0.7rem; border-radius: 8px; cursor: pointer;
-            font-size: 0.9rem; transition: background 0.2s;
-        }
+        .btn-unban { background: #d4edda; color: #155724; border: none; padding: 0.4rem 0.7rem; border-radius: 8px; cursor: pointer; font-size: 0.9rem; transition: background 0.2s; }
         .btn-unban:hover { background: #28a745; color: #fff; }
 
-        .status-badge {
-            padding: 3px 10px; border-radius: 12px;
-            font-size: 0.8rem; font-weight: 700;
-        }
-        .status-badge.active  { background: #d4edda; color: #155724; }
-        .status-badge.banned  { background: #f8d7da; color: #721c24; }
+        .status-badge { padding: 3px 10px; border-radius: 12px; font-size: 0.8rem; font-weight: 700; }
+        .status-badge.active { background: #d4edda; color: #155724; }
+        .status-badge.banned { background: #f8d7da; color: #721c24; }
 
-        .btn-edit { background: #e8f4fd; color: #007bff; }
-        .btn-edit:hover { background: #007bff; color: white; }
+        .btn-edit   { background: #e8f4fd; color: #007bff; }
+        .btn-edit:hover   { background: #007bff; color: white; }
         .btn-delete { background: #fde8e8; color: var(--danger); }
         .btn-delete:hover { background: var(--danger); color: white; }
 
-        /* ===== Modals ===== */
         .modal-overlay {
             position: fixed; inset: 0;
             background: rgba(0,0,0,0.5);
@@ -674,9 +627,7 @@
             transition: border-color 0.3s;
             color: var(--text);
         }
-        .form-group input:focus, .form-group select:focus, .form-group textarea:focus {
-            outline: none; border-color: var(--primary);
-        }
+        .form-group input:focus, .form-group select:focus, .form-group textarea:focus { outline: none; border-color: var(--primary); }
         .form-group input:disabled { background: #f0f0f0; cursor: not-allowed; }
 
         .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
@@ -712,7 +663,6 @@
 
         #formError { color: var(--danger); font-size: 0.85rem; margin-top: 0.5rem; }
 
-        /* Confirm Modal */
         .confirm-modal { max-width: 380px; text-align: center; }
         .confirm-modal .icon { font-size: 3rem; margin-bottom: 1rem; }
         .confirm-modal p { color: var(--text-light); margin-bottom: 0.5rem; }
@@ -730,7 +680,6 @@
             font-weight: 700;
         }
 
-        /* Import Modal */
         .bulk-textarea {
             width: 100%;
             height: 200px;
@@ -743,7 +692,6 @@
             direction: ltr;
         }
 
-        /* Toast */
         .toast {
             position: fixed;
             bottom: 2rem;
@@ -765,12 +713,13 @@
 
         @media (max-width: 768px) {
             .stats-grid { grid-template-columns: 1fr; }
-            .form-grid { grid-template-columns: 1fr; }
-            .controls { flex-direction: column; }
-            header { padding: 1rem; }
-            .container { padding: 1rem; }
-            table { font-size: 0.8rem; }
-            tbody td { padding: 0.6rem 0.4rem; }
+            .form-grid  { grid-template-columns: 1fr; }
+            .controls   { flex-direction: column; }
+            header      { padding: 1rem; }
+            .container  { padding: 1rem; }
+            table       { font-size: 0.8rem; }
+            tbody td    { padding: 0.6rem 0.4rem; }
+            .admin-email-badge { display: none; }
         }
     </style>
 </head>
@@ -782,8 +731,9 @@
         <div style="font-size: 3rem; margin-bottom: 0.5rem;">🛡️</div>
         <h1>لوحة التحكم</h1>
         <p>The Process Admin Panel</p>
-        <input type="password" id="adminPass" class="auth-input" placeholder="••••••••••••">
-        <button class="auth-btn" onclick="submitAuth()">
+        <input type="email"    id="adminEmail_input" class="auth-input" placeholder="admin@theprocess.com" autocomplete="email">
+        <input type="password" id="adminPass"        class="auth-input" placeholder="••••••••••••" autocomplete="current-password">
+        <button class="auth-btn" id="loginBtn" onclick="submitAuth()">
             <i class="fas fa-lock-open"></i> دخول
         </button>
         <div id="authError"></div>
@@ -794,13 +744,15 @@
 <div id="adminPanel">
     <header>
         <div class="header-title">🛡️ لوحة تحكم <span>The Process</span></div>
-        <button class="logout-btn" onclick="logout()">
-            <i class="fas fa-sign-out-alt"></i> خروج
-        </button>
+        <div class="header-right">
+            <span class="admin-email-badge" id="adminEmail"></span>
+            <button class="logout-btn" onclick="logout()">
+                <i class="fas fa-sign-out-alt"></i> خروج
+            </button>
+        </div>
     </header>
 
     <div class="container">
-        <!-- Stats -->
         <div class="stats-grid">
             <div class="stat-card">
                 <div class="stat-number" id="totalCount">0</div>
@@ -816,7 +768,6 @@
             </div>
         </div>
 
-        <!-- Controls -->
         <div class="controls">
             <div class="search-box">
                 <i class="fas fa-search"></i>
@@ -838,24 +789,16 @@
             </div>
         </div>
 
-        <!-- Table -->
         <div class="table-card">
             <table>
                 <thead>
                     <tr>
-                        <th>صورة</th>
-                        <th>الاسم</th>
-                        <th>كود الدخول</th>
-                        <th>كود الفيديو</th>
-                        <th>التليفون</th>
-                        <th>الإيميل</th>
-                        <th>القسم</th>
-                        <th>الحالة</th>
-                        <th>إجراءات</th>
+                        <th>صورة</th><th>الاسم</th><th>كود الدخول</th><th>كود الفيديو</th>
+                        <th>التليفون</th><th>الإيميل</th><th>القسم</th><th>الحالة</th><th>إجراءات</th>
                     </tr>
                 </thead>
                 <tbody id="studentsBody">
-                    <tr><td colspan="7" style="text-align:center;padding:3rem;color:#888">
+                    <tr><td colspan="9" style="text-align:center;padding:3rem;color:#888">
                         <i class="fas fa-spinner fa-spin"></i> جاري التحميل...
                     </td></tr>
                 </tbody>
@@ -864,7 +807,7 @@
     </div>
 </div>
 
-<!-- Add/Edit Student Modal -->
+<!-- Add/Edit Modal -->
 <div class="modal-overlay" id="studentModal" style="display:none" onclick="if(event.target===this)closeModal()">
     <div class="modal">
         <h2 id="modalTitle">➕ إضافة طالب جديد</h2>
@@ -949,9 +892,9 @@
         <h2>📥 استيراد طلاب بالجملة</h2>
         <p style="color:#666;margin-bottom:1rem;font-size:0.9rem">
             الصق JSON بالشكل ده:
-            <code style="background:#f0f0f0;padding:0.2rem 0.5rem;border-radius:4px;font-size:0.8rem">{"17606": {"name": "محمد", "phone": "01XXXXXXXX", "email": "...", "language": "لغات", "image": "..."}}</code>
+            <code style="background:#f0f0f0;padding:0.2rem 0.5rem;border-radius:4px;font-size:0.8rem">{"17606": {"name": "محمد", "phone": "01XXXXXXXX", "language": "لغات"}}</code>
         </p>
-        <textarea class="bulk-textarea" id="bulkInput" placeholder='{"CODE": {"name": "...", "phone": "...", "email": "...", "language": "لغات", "image": "..."}}'></textarea>
+        <textarea class="bulk-textarea" id="bulkInput" placeholder='{"CODE": {"name": "...", "phone": "...", "language": "لغات"}}'></textarea>
         <div class="modal-footer">
             <button class="btn-cancel" onclick="closeImport()">إلغاء</button>
             <button class="btn-save" onclick="importBulk()">
