@@ -31,6 +31,7 @@
         let allStudents = {};
         let editingCode = null;
         let studentsListenerActive = false;
+        let selectedStudents = new Set();
 
         // ===== Firebase Auth — مراقبة حالة الدخول =====
         onAuthStateChanged(auth, (user) => {
@@ -113,16 +114,24 @@
 
             const entries = Object.entries(data);
             if (entries.length === 0) {
-                tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;padding:2rem;color:#888">لا يوجد طلاب بعد. ابدأ بإضافة طالب جديد 👆</td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="10" style="text-align:center;padding:2rem;color:#888">لا يوجد طلاب بعد. ابدأ بإضافة طالب جديد 👆</td></tr>`;
+                updateBulkBar();
                 return;
             }
 
             entries.forEach(([code, student]) => {
                 const tr = document.createElement('tr');
+                const isSelected = selectedStudents.has(code);
+                if (isSelected) tr.classList.add('row-selected');
                 const vcBadge = student.videoCode
                     ? `<span style="background:#e8f4fd;color:#007bff;padding:2px 8px;border-radius:10px;font-size:0.8rem;font-weight:700">${student.videoCode}</span>`
                     : `<span style="background:#fde8e8;color:#dc3545;padding:2px 8px;border-radius:10px;font-size:0.8rem">غير محدد ⚠️</span>`;
                 tr.innerHTML = `
+                    <td>
+                        <input type="checkbox" class="student-checkbox" data-code="${code}"
+                               ${isSelected ? 'checked' : ''}
+                               onchange="toggleSelect('${code}', this.checked)">
+                    </td>
                     <td>
                         <img src="${student.image || 'https://api.dicebear.com/7.x/bottts/svg?seed=' + code}"
                              alt="${student.name}" class="student-avatar"
@@ -157,7 +166,100 @@
                 `;
                 tbody.appendChild(tr);
             });
+            updateBulkBar();
         }
+
+        // ===== Select Logic =====
+        window.toggleSelect = function(code, checked) {
+            if (checked) selectedStudents.add(code);
+            else selectedStudents.delete(code);
+            // update row highlight
+            document.querySelectorAll('.student-checkbox').forEach(cb => {
+                if (cb.dataset.code === code) {
+                    cb.closest('tr').classList.toggle('row-selected', checked);
+                }
+            });
+            updateBulkBar();
+        };
+
+        window.toggleSelectAll = function(checked) {
+            document.querySelectorAll('.student-checkbox').forEach(cb => {
+                const code = cb.dataset.code;
+                cb.checked = checked;
+                if (checked) selectedStudents.add(code);
+                else selectedStudents.delete(code);
+                cb.closest('tr').classList.toggle('row-selected', checked);
+            });
+            updateBulkBar();
+        };
+
+        function updateBulkBar() {
+            const count = selectedStudents.size;
+            const bar = document.getElementById('bulkActionBar');
+            const countEl = document.getElementById('selectedCount');
+            countEl.textContent = count;
+            bar.style.display = count > 0 ? 'flex' : 'none';
+        }
+
+        // ===== Bulk Ban =====
+        window.bulkBan = function() {
+            if (selectedStudents.size === 0) return;
+            if (!confirm(`🚫 هتوقف ${selectedStudents.size} طالب؟`)) return;
+            const promises = [];
+            selectedStudents.forEach(code => {
+                promises.push(update(ref(db, `students/${code}`), { banned: true }));
+            });
+            Promise.all(promises).then(() => {
+                showToast(`🚫 تم توقيف ${promises.length} طالب!`, 'warning');
+                selectedStudents.clear();
+                updateBulkBar();
+            });
+        };
+
+        // ===== Bulk Unban =====
+        window.bulkUnban = function() {
+            if (selectedStudents.size === 0) return;
+            if (!confirm(`✅ هتفعّل ${selectedStudents.size} طالب؟`)) return;
+            const promises = [];
+            selectedStudents.forEach(code => {
+                promises.push(update(ref(db, `students/${code}`), { banned: false }));
+            });
+            Promise.all(promises).then(() => {
+                showToast(`✅ تم تفعيل ${promises.length} طالب!`);
+                selectedStudents.clear();
+                updateBulkBar();
+            });
+        };
+
+        // ===== Copy Codes =====
+        window.copyCodes = function() {
+            if (selectedStudents.size === 0) return;
+            const codes = Array.from(selectedStudents).join('\n');
+            navigator.clipboard.writeText(codes).then(() => {
+                showToast(`📋 تم نسخ ${selectedStudents.size} كود!`);
+            }).catch(() => {
+                // fallback
+                const ta = document.createElement('textarea');
+                ta.value = codes;
+                document.body.appendChild(ta);
+                ta.select();
+                document.execCommand('copy');
+                document.body.removeChild(ta);
+                showToast(`📋 تم نسخ ${selectedStudents.size} كود!`);
+            });
+        };
+
+        // ===== Clear Selection =====
+        window.clearSelection = function() {
+            selectedStudents.clear();
+            document.querySelectorAll('.student-checkbox').forEach(cb => {
+                cb.checked = false;
+                cb.closest('tr').classList.remove('row-selected');
+            });
+            const allCb = document.getElementById('selectAllCheckbox');
+            if (allCb) allCb.checked = false;
+            updateBulkBar();
+        };
 
         // ===== Add / Edit Student =====
         window.openAddModal = function() {
@@ -563,6 +665,63 @@
             object-fit: cover;
         }
 
+        /* ===== Checkbox & Selection ===== */
+        .student-checkbox {
+            width: 18px; height: 18px;
+            cursor: pointer;
+            accent-color: var(--primary);
+        }
+
+        .row-selected { background: #fff5f5 !important; }
+
+        /* ===== Bulk Action Bar ===== */
+        #bulkActionBar {
+            display: none;
+            align-items: center;
+            gap: 0.75rem;
+            flex-wrap: wrap;
+            background: linear-gradient(135deg, var(--primary), var(--primary-light));
+            color: white;
+            padding: 0.85rem 1.5rem;
+            border-radius: 12px;
+            margin-bottom: 1rem;
+            box-shadow: 0 4px 15px rgba(128,0,0,0.25);
+            animation: slideDown 0.2s ease;
+        }
+
+        @keyframes slideDown {
+            from { opacity: 0; transform: translateY(-10px); }
+            to   { opacity: 1; transform: translateY(0); }
+        }
+
+        #bulkActionBar .bulk-label {
+            font-weight: 700;
+            font-size: 0.95rem;
+            flex: 1;
+        }
+
+        .btn-bulk {
+            padding: 0.45rem 1.1rem;
+            border: 2px solid rgba(255,255,255,0.6);
+            border-radius: 8px;
+            cursor: pointer;
+            font-family: 'Tajawal', sans-serif;
+            font-size: 0.88rem;
+            font-weight: 700;
+            transition: all 0.2s;
+            background: rgba(255,255,255,0.15);
+            color: white;
+        }
+        .btn-bulk:hover { background: rgba(255,255,255,0.3); }
+        .btn-bulk.danger { border-color: #ffd0d0; background: rgba(220,53,69,0.5); }
+        .btn-bulk.danger:hover { background: rgba(220,53,69,0.8); }
+        .btn-bulk.success { border-color: #c3ffcf; background: rgba(40,167,69,0.5); }
+        .btn-bulk.success:hover { background: rgba(40,167,69,0.8); }
+        .btn-bulk.copy { border-color: #d0e8ff; background: rgba(0,123,255,0.4); }
+        .btn-bulk.copy:hover { background: rgba(0,123,255,0.7); }
+        .btn-bulk.clear { background: rgba(255,255,255,0.08); border-color: rgba(255,255,255,0.3); }
+        .btn-bulk.clear:hover { background: rgba(255,255,255,0.2); }
+
         .code-badge {
             background: #f0f0f0;
             padding: 0.25rem 0.6rem;
@@ -790,15 +949,32 @@
         </div>
 
         <div class="table-card">
+            <!-- Bulk Action Bar -->
+            <div id="bulkActionBar">
+                <span class="bulk-label">✅ تم تحديد <span id="selectedCount">0</span> طالب</span>
+                <button class="btn-bulk danger" onclick="bulkBan()">
+                    <i class="fas fa-ban"></i> توقيف الكل
+                </button>
+                <button class="btn-bulk success" onclick="bulkUnban()">
+                    <i class="fas fa-unlock"></i> تفعيل الكل
+                </button>
+                <button class="btn-bulk copy" onclick="copyCodes()">
+                    <i class="fas fa-copy"></i> نسخ الأكواد
+                </button>
+                <button class="btn-bulk clear" onclick="clearSelection()">
+                    <i class="fas fa-times"></i> إلغاء التحديد
+                </button>
+            </div>
             <table>
                 <thead>
                     <tr>
+                        <th><input type="checkbox" id="selectAllCheckbox" class="student-checkbox" onchange="toggleSelectAll(this.checked)" title="تحديد الكل"></th>
                         <th>صورة</th><th>الاسم</th><th>كود الدخول</th><th>كود الفيديو</th>
                         <th>التليفون</th><th>الإيميل</th><th>القسم</th><th>الحالة</th><th>إجراءات</th>
                     </tr>
                 </thead>
                 <tbody id="studentsBody">
-                    <tr><td colspan="9" style="text-align:center;padding:3rem;color:#888">
+                    <tr><td colspan="10" style="text-align:center;padding:3rem;color:#888">
                         <i class="fas fa-spinner fa-spin"></i> جاري التحميل...
                     </td></tr>
                 </tbody>
