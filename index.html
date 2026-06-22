@@ -2098,7 +2098,21 @@ ${profileLink}`;
         let swRegistration = null;
         if ('serviceWorker' in navigator) {
             navigator.serviceWorker.register('sw.js', { scope: './' })
-                .then(reg => { swRegistration = reg; })
+                .then(reg => {
+                    swRegistration = reg;
+                    // Periodic Sync لو مدعوم (Android Chrome)
+                    if ('periodicSync' in reg) {
+                        navigator.permissions.query({ name: 'periodic-background-sync' }).then(s => {
+                            if (s.state === 'granted') {
+                                reg.periodicSync.register('check-blocked', { minInterval: 30000 }).catch(() => {});
+                            }
+                        }).catch(() => {});
+                    }
+                    // Fallback: TICK كل 30 ثانية لما الصفحة مفتوحة
+                    setInterval(() => {
+                        if (reg.active) reg.active.postMessage({ type: 'TICK' });
+                    }, 30000);
+                })
                 .catch(err => console.warn('SW error:', err));
         }
 
