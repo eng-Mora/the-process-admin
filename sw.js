@@ -1,72 +1,110 @@
 // sw.js — Service Worker for The Process Admin PWA
-const CACHE_NAME = 'process-admin-v1';
+// يستمع لـ Firebase مباشرة — يبعت إشعارات حتى لو التطبيق مسكر
 
-// ── Install ──
-self.addEventListener('install', (e) => {
-    self.skipWaiting();
-});
+const DB_URL = 'https://the-process-5d196-default-rtdb.firebaseio.com';
+const ICON   = 'https://api.dicebear.com/7.x/bottts/svg?seed=process-admin';
 
-// ── Activate ──
-self.addEventListener('activate', (e) => {
-    e.waitUntil(clients.claim());
-});
+self.addEventListener('install', () => self.skipWaiting());
+self.addEventListener('activate', (e) => e.waitUntil(clients.claim()));
 
-// ── Push Notifications ──
-self.addEventListener('push', (e) => {
-    let data = { title: '🛡️ The Process', body: 'إشعار جديد' };
+// ── Firebase polling كل 30 ثانية في الخلفية ──
+let lastBlockedIds = null; // null = أول تشغيل، مش هنبعت إشعارات للقديم
+
+async function checkBlocked() {
     try {
-        data = e.data.json();
-    } catch (_) {
-        try { data.body = e.data.text(); } catch (_) {}
-    }
+        const res  = await fetch(`${DB_URL}/blockedAttempts.json`);
+        const data = await res.json();
+        if (!data) return;
 
-    e.waitUntil(
-        self.registration.showNotification(data.title || '🛡️ The Process', {
-            body: data.body || '',
-            icon: data.icon || 'https://api.dicebear.com/7.x/bottts/svg?seed=process-admin',
-            badge: 'https://api.dicebear.com/7.x/bottts/svg?seed=process-badge',
-            tag: data.tag || 'process-notif',
-            renotify: true,
-            dir: 'rtl',
-            lang: 'ar',
-            vibrate: [200, 100, 200],
-            data: { url: data.url || '/the-process-admin/admin.html' }
-        })
-    );
-});
+        const currentIds = new Set();
+        Object.values(data).forEach(entries =>
+            Object.keys(entries || {}).forEach(id => currentIds.add(id))
+        );
 
-// ── Notification Click → فتح التطبيق ──
-self.addEventListener('notificationclick', (e) => {
-    e.notification.close();
-    const targetUrl = (e.notification.data && e.notification.data.url)
-        ? e.notification.data.url
-        : '/the-process-admin/admin.html';
+        if (lastBlockedIds === null) {
+            // أول مرة — نحفظ الموجود بس مش نبعت إشعارات
+            lastBlockedIds = currentIds;
+            return;
+        }
 
-    e.waitUntil(
-        clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
-            for (const client of list) {
-                if (client.url.includes('the-process-admin') && 'focus' in client) {
-                    return client.focus();
+        // إشعار بس للجديد
+        const newOnes = [];
+        Object.entries(data).forEach(([code, entries]) => {
+            Object.entries(entries || {}).forEach(([id, entry]) => {
+                if (!lastBlockedIds.has(id)) {
+                    newOnes.push({ code, entry });
                 }
-            }
-            if (clients.openWindow) return clients.openWindow(targetUrl);
-        })
-    );
+            });
+        });
+
+        for (const { code, entry } of newOnes) {
+            await self.registration.showNotification('🚨 محاولة دخول مرفوضة', {
+                body: `الكود "${code}" (${entry.studentName || code}) — IP: ${entry.ip || '—'}`,
+                icon: ICON,
+                tag: `blocked-${code}`,
+                renotify: true,
+                dir: 'rtl',
+                lang: 'ar',
+                vibrate: [200, 100, 200],
+                data: { url: self.registration.scope }
+            });
+        }
+
+        lastBlockedIds = currentIds;
+    } catch (e) { /* network error — ignore */ }
+}
+
+// ── Periodic polling (كل 30 ثانية) ──
+self.addEventListener('periodicsync', (e) => {
+    if (e.tag === 'check-blocked') e.waitUntil(checkBlocked());
 });
 
-// ── Message from page → show notification directly (بدون push server) ──
+// ── Fallback: setInterval من الصفحة ──
 self.addEventListener('message', (e) => {
+    if (e.data && e.data.type === 'TICK') checkBlocked();
+
     if (e.data && e.data.type === 'SHOW_NOTIFICATION') {
         const { title, body, tag } = e.data;
         self.registration.showNotification(title || '🛡️ The Process', {
             body: body || '',
-            icon: 'https://api.dicebear.com/7.x/bottts/svg?seed=process-admin',
+            icon: ICON,
             tag: tag || 'process-notif',
             renotify: true,
             dir: 'rtl',
             lang: 'ar',
             vibrate: [200, 100, 200],
-            data: { url: '/the-process-admin/admin.html' }
+            data: { url: self.registration.scope }
         });
     }
+});
+
+// ── Push من سيرفر (مستقبلاً) ──
+self.addEventListener('push', (e) => {
+    let data = { title: '🛡️ The Process', body: 'إشعار جديد' };
+    try { data = e.data.json(); } catch (_) {}
+    e.waitUntil(
+        self.registration.showNotification(data.title, {
+            body: data.body,
+            icon: ICON,
+            tag: data.tag || 'process-notif',
+            renotify: true,
+            dir: 'rtl',
+            lang: 'ar',
+            vibrate: [200, 100, 200]
+        })
+    );
+});
+
+// ── Click على الإشعار ──
+self.addEventListener('notificationclick', (e) => {
+    e.notification.close();
+    const url = (e.notification.data && e.notification.data.url) || self.registration.scope;
+    e.waitUntil(
+        clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
+            for (const c of list) {
+                if (c.url.includes('the-process-admin') && 'focus' in c) return c.focus();
+            }
+            if (clients.openWindow) return clients.openWindow(url);
+        })
+    );
 });
