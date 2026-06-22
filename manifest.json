@@ -1,0 +1,27 @@
+{
+  "name": "The Process - Admin",
+  "short_name": "Process Admin",
+  "description": "لوحة تحكم المشرف - The Process",
+  "start_url": "/the-process-admin/admin.html",
+  "scope": "/the-process-admin/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0a0a0a",
+  "theme_color": "#800000",
+  "lang": "ar",
+  "dir": "rtl",
+  "icons": [
+    {
+      "src": "https://api.dicebear.com/7.x/bottts/svg?seed=process-admin&size=192",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "https://api.dicebear.com/7.x/bottts/svg?seed=process-admin&size=512",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
