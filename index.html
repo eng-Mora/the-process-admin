@@ -275,6 +275,9 @@
                 allStudents = snapshot.val() || {};
                 renderTable(allStudents);
                 updateStats(allStudents);
+                if (typeof renderReviewCodesTable === 'function' && document.getElementById('reviewCodesBody')) {
+                    renderReviewCodesTable();
+                }
             });
         }
 
@@ -555,6 +558,41 @@
             if (!confirm(`📱 هتعمل Reset للجهاز المسجل على كود "${name}" (${code})؟\nالطالب هيقدر يدخل من جهاز جديد بعد كده.`)) return;
             remove(ref(db, `students/${code}/deviceId`))
                 .then(() => showToast(`📱 تم فتح الكود لجهاز جديد — ${name}`, 'success'))
+                .catch(err => alert('❌ خطأ: ' + err.message));
+        };
+
+        // ===== Bulk Reset Device (للأكواد المحددة بس) =====
+        window.bulkResetDevice = function() {
+            if (selectedStudents.size === 0) return;
+            const codesWithDevice = Array.from(selectedStudents).filter(code => allStudents[code] && allStudents[code].deviceId);
+            if (codesWithDevice.length === 0) {
+                showToast('ℹ️ مفيش أي كود من المحددين عنده جهاز مربوط حاليًا', 'warning');
+                return;
+            }
+            if (!confirm(`📱 هتعمل Reset لأجهزة ${codesWithDevice.length} كود (من أصل ${selectedStudents.size} محدد)؟\nكل الأكواد دي هتقدر تتفتح من جهاز جديد.`)) return;
+            const promises = codesWithDevice.map(code => remove(ref(db, `students/${code}/deviceId`)));
+            Promise.all(promises)
+                .then(() => {
+                    showToast(`📱 تم فتح ${promises.length} كود لأجهزة جديدة!`, 'success');
+                    selectedStudents.clear();
+                    updateBulkBar();
+                })
+                .catch(err => alert('❌ خطأ: ' + err.message));
+        };
+
+        // ===== Reset All Devices (كل الطلاب — بدون تحديد) =====
+        window.resetAllStudentDevices = function() {
+            const codesWithDevice = Object.keys(allStudents).filter(code => allStudents[code] && allStudents[code].deviceId);
+            if (codesWithDevice.length === 0) {
+                showToast('ℹ️ مفيش أي كود طالب مربوط بجهاز حاليًا', 'warning');
+                return;
+            }
+            const typed = prompt(`⚠️ هتعمل Reset لأجهزة كل الطلاب دفعة واحدة (${codesWithDevice.length} كود)!\nكل الطلاب هيقدروا يدخلوا من أي جهاز جديد بعد كده.\n\nاكتب "تأكيد" (بدون علامات) عشان تكمل:`);
+            if (typed === null) return;
+            if (typed.trim() !== 'تأكيد') { showToast('❌ لم يتم كتابة "تأكيد" بشكل صحيح — تم الإلغاء', 'warning'); return; }
+            const promises = codesWithDevice.map(code => remove(ref(db, `students/${code}/deviceId`)));
+            Promise.all(promises)
+                .then(() => showToast(`📱 تم فتح ${promises.length} كود لجميع الطلاب!`, 'success'))
                 .catch(err => alert('❌ خطأ: ' + err.message));
         };
 
@@ -1155,15 +1193,17 @@
         window.switchTab = function(tab, btn) {
             document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
-            document.getElementById('tab-students').style.display   = tab === 'students'   ? 'block' : 'none';
-            document.getElementById('tab-attendance').style.display = tab === 'attendance' ? 'block' : 'none';
-            document.getElementById('tab-groups').style.display     = tab === 'groups'     ? 'block' : 'none';
-            document.getElementById('tab-qr').style.display         = tab === 'qr'         ? 'block' : 'none';
-            document.getElementById('tab-loginlogs').style.display  = tab === 'loginlogs'  ? 'block' : 'none';
-            if (tab === 'attendance') renderAttendanceTable();
-            if (tab === 'groups')    renderGroupsList();
-            if (tab === 'qr')        initQRTab();
-            if (tab === 'loginlogs') renderLoginLogsTable();
+            document.getElementById('tab-students').style.display    = tab === 'students'    ? 'block' : 'none';
+            document.getElementById('tab-attendance').style.display  = tab === 'attendance'  ? 'block' : 'none';
+            document.getElementById('tab-groups').style.display      = tab === 'groups'      ? 'block' : 'none';
+            document.getElementById('tab-qr').style.display          = tab === 'qr'          ? 'block' : 'none';
+            document.getElementById('tab-loginlogs').style.display   = tab === 'loginlogs'   ? 'block' : 'none';
+            document.getElementById('tab-reviewcodes').style.display = tab === 'reviewcodes' ? 'block' : 'none';
+            if (tab === 'attendance')   renderAttendanceTable();
+            if (tab === 'groups')       renderGroupsList();
+            if (tab === 'qr')           initQRTab();
+            if (tab === 'loginlogs')    renderLoginLogsTable();
+            if (tab === 'reviewcodes')  loadReviewCodesTab();
         };
 
         function initQRTab() {
@@ -2166,6 +2206,7 @@ ${profileLink}`;
                             type: 'success',
                             code,
                             name: entry.name || (allStudents[code] && allStudents[code].name) || code,
+                            loginType: entry.loginType || null,
                             ip: entry.ip || '—',
                             deviceType: entry.deviceType || '—',
                             browser: entry.browser || '—',
@@ -2190,11 +2231,13 @@ ${profileLink}`;
                             id: entryId,
                             code,
                             name: entry.studentName || (allStudents[code] && allStudents[code].name) || code,
+                            loginType: entry.loginType || null,
                             ip: entry.ip || '—',
                             deviceType: entry.deviceType || '—',
                             browser: entry.browser || '—',
                             at: entry.at || 0,
-                            read: !!entry.read
+                            read: !!entry.read,
+                            sameNetwork: !!entry.sameNetwork
                         });
                     });
                 });
@@ -2205,11 +2248,12 @@ ${profileLink}`;
                     const prevIds = new Set(allBlockedLogs.map(x => x.id));
                     const freshOnes = list.filter(x => !prevIds.has(x.id));
                     freshOnes.forEach(item => {
+                        const suspicionTag = item.sameNetwork ? '🟡 شبهة ضعيفة' : '🔴 شبهة قوية';
                         showBrowserNotification(
                             '🚨 محاولة دخول مرفوضة',
-                            `الكود "${item.code}" (${item.name}) — جهاز جديد — IP: ${item.ip}`
+                            `الكود "${item.code}" (${item.name}) — ${suspicionTag} — IP: ${item.ip}`
                         );
-                        showToast(`🚨 محاولة دخول مرفوضة على كود ${item.code}`, 'warning');
+                        showToast(`🚨 محاولة دخول مرفوضة على كود ${item.code} — ${suspicionTag}`, 'warning');
                     });
                 }
                 firstBlockedLoadDone = true;
@@ -2239,8 +2283,13 @@ ${profileLink}`;
             body.innerHTML = allBlockedLogs.slice(0, 30).map(item => `
                 <div class="notif-item ${item.read ? '' : 'unread'}">
                     <div class="notif-item-top">
-                        <strong>${item.name}</strong>
+                        <strong>${item.name}</strong>${item.loginType === 'review' ? ' <span style="background:#eee8f7;color:#6c3483;padding:1px 6px;border-radius:8px;font-size:0.65rem;font-weight:700">🎓 مراجعة</span>' : ''}
                         <code class="code-badge" style="font-size:0.75rem">${item.code}</code>
+                    </div>
+                    <div class="notif-item-meta">
+                        <span class="suspicion-tag ${item.sameNetwork ? 'low' : 'high'}">
+                            ${item.sameNetwork ? '🟡 شبهة ضعيفة' : '🔴 شبهة قوية'}
+                        </span>
                     </div>
                     <div class="notif-item-meta">
                         <span><i class="fas fa-network-wired"></i> ${item.ip}</span>
@@ -2304,7 +2353,7 @@ ${profileLink}`;
             merged = merged.slice(0, 300); // حماية من تحميل آلاف السجلات مرة واحدة
 
             if (merged.length === 0) {
-                tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;padding:2rem;color:#888">لا يوجد سجلات</td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;padding:2rem;color:#888">لا يوجد سجلات</td></tr>`;
                 return;
             }
 
@@ -2313,11 +2362,14 @@ ${profileLink}`;
                     <td>${item.type === 'blocked'
                         ? '<span class="status-badge banned">🚨 مرفوض</span>'
                         : '<span class="status-badge active">✅ ناجح</span>'}</td>
-                    <td><strong>${item.name}</strong></td>
+                    <td><strong>${item.name}</strong>${item.loginType === 'review' ? ' <span style="background:#eee8f7;color:#6c3483;padding:1px 7px;border-radius:8px;font-size:0.7rem;font-weight:700;white-space:nowrap">🎓 مراجعة</span>' : ''}</td>
                     <td><code class="code-badge">${item.code}</code></td>
                     <td>${item.ip}</td>
                     <td>${item.deviceType}</td>
                     <td>${item.browser}</td>
+                    <td>${item.type === 'blocked'
+                        ? `<span class="suspicion-tag ${item.sameNetwork ? 'low' : 'high'}">${item.sameNetwork ? '🟡 ضعيفة' : '🔴 قوية'}</span>`
+                        : '<span style="color:#ccc">—</span>'}</td>
                     <td style="white-space:nowrap;font-size:0.85rem;color:#666">${formatLogTime(item.at)}</td>
                 </tr>
             `).join('');
@@ -2325,6 +2377,219 @@ ${profileLink}`;
 
         // ملاحظة: تشغيل الاستماع وطلب إذن الإشعارات يتم داخل onAuthStateChanged
         // بعد تأكيد دخول الأدمن فعلياً (وليس فور تحميل الصفحة)
+
+        // ════════════════════════════════════════════════════════
+        //  Review Codes — عرض حالة الجهاز + Reset Device
+        // ════════════════════════════════════════════════════════
+        let allReviewCodesFlat = []; // { rcId, desc, code, reviewDeviceInfo }
+        let reviewDevicesCache = {}; // { code: { deviceId, lastSuccessIp } }
+        let reviewCodesListenerActive = false;
+        let selectedReviewCodes = new Set();
+
+        // ── مصدر موحّد لمعلومات الجهاز لأي كود: students أولاً (لو موجود فيها)، وإلا reviewDevices ──
+        function getUnifiedDeviceInfo(code) {
+            if (allStudents[code] && allStudents[code].deviceId) {
+                return { deviceId: allStudents[code].deviceId, lastSuccessIp: allStudents[code].lastSuccessIp, fromStudents: true };
+            }
+            if (reviewDevicesCache[code]) {
+                return { ...reviewDevicesCache[code], fromStudents: false };
+            }
+            return null;
+        }
+
+        function loadReviewCodesTab() {
+            if (reviewCodesListenerActive) { renderReviewCodesTable(); return; }
+            reviewCodesListenerActive = true;
+
+            onValue(ref(db, 'reviews'), (snap) => {
+                const reviews = snap.val() || {};
+                const flat = [];
+                Object.entries(reviews).forEach(([rcId, rc]) => {
+                    if (!rc || !rc.accessCodes) return;
+                    const codes = Object.values(rc.accessCodes).map(String);
+                    codes.forEach(code => {
+                        flat.push({
+                            rcId,
+                            desc: rc.desc || rc.code || rcId,
+                            code
+                        });
+                    });
+                });
+                allReviewCodesFlat = flat;
+                renderReviewCodesTable();
+            });
+
+            onValue(ref(db, 'reviewDevices'), (snap) => {
+                reviewDevicesCache = snap.val() || {};
+                renderReviewCodesTable();
+            });
+        }
+
+        window.renderReviewCodesTable = function() {
+            const tbody = document.getElementById('reviewCodesBody');
+            if (!tbody) return;
+            const q = (document.getElementById('reviewCodesSearch')?.value || '').toLowerCase();
+
+            let list = allReviewCodesFlat;
+            if (q) {
+                list = list.filter(x =>
+                    (x.code || '').toLowerCase().includes(q) ||
+                    (x.desc || '').toLowerCase().includes(q)
+                );
+            }
+
+            if (list.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;padding:2rem;color:#888">لا يوجد كودات مراجعة</td></tr>`;
+                updateReviewBulkBar();
+                return;
+            }
+
+            tbody.innerHTML = list.map(item => {
+                const devInfo = getUnifiedDeviceInfo(item.code);
+                const hasDevice = devInfo && devInfo.deviceId;
+                const ip = devInfo && devInfo.lastSuccessIp ? devInfo.lastSuccessIp : '—';
+                const isSelected = selectedReviewCodes.has(item.code);
+                return `
+                <tr class="${isSelected ? 'row-selected' : ''}">
+                    <td>
+                        <input type="checkbox" class="review-checkbox" data-code="${item.code}"
+                               ${isSelected ? 'checked' : ''}
+                               onchange="toggleSelectReview('${item.code}', this.checked)">
+                    </td>
+                    <td>${item.desc}</td>
+                    <td>
+                        <code class="code-badge">${item.code}</code>
+                        ${devInfo && devInfo.fromStudents ? `<span style="font-size:0.7rem;color:#888;margin-right:4px">👤 كود طالب</span>` : ''}
+                    </td>
+                    <td style="font-family:monospace;font-size:0.85rem">${ip}</td>
+                    <td>
+                        ${hasDevice
+                            ? `<span style="background:#fde8e8;color:#dc3545;padding:2px 8px;border-radius:10px;font-size:0.8rem;font-weight:700">🔒 مربوط</span>`
+                            : `<span style="background:#e8f9ee;color:#198754;padding:2px 8px;border-radius:10px;font-size:0.8rem">🔓 غير مربوط</span>`}
+                    </td>
+                    <td style="white-space:nowrap">
+                        ${hasDevice
+                            ? `<button class="btn-edit" title="Reset Device" onclick="resetReviewDevice('${item.code}', '${item.desc.replace(/'/g, "\\'")}', ${devInfo.fromStudents ? 'true' : 'false'})">
+                                   <i class="fas fa-mobile-screen-button"></i> Reset
+                               </button>`
+                            : ''}
+                        <button class="btn-edit" title="عرض سجل الدخول لهذا الكود" onclick="viewCodeLoginLogs('${item.code}')">
+                            <i class="fas fa-clipboard-list"></i> السجل
+                        </button>
+                    </td>
+                </tr>
+            `;
+            }).join('');
+            updateReviewBulkBar();
+        };
+
+        // ── تحديد كودات المراجعة (Select) ─────────────────────────
+        window.toggleSelectReview = function(code, checked) {
+            if (checked) selectedReviewCodes.add(code);
+            else selectedReviewCodes.delete(code);
+            document.querySelectorAll('.review-checkbox').forEach(cb => {
+                if (cb.dataset.code === code) cb.closest('tr').classList.toggle('row-selected', checked);
+            });
+            updateReviewBulkBar();
+        };
+
+        window.toggleSelectAllReview = function(checked) {
+            document.querySelectorAll('.review-checkbox').forEach(cb => {
+                const code = cb.dataset.code;
+                cb.checked = checked;
+                if (checked) selectedReviewCodes.add(code);
+                else selectedReviewCodes.delete(code);
+                cb.closest('tr').classList.toggle('row-selected', checked);
+            });
+            updateReviewBulkBar();
+        };
+
+        function updateReviewBulkBar() {
+            const count = selectedReviewCodes.size;
+            const bar = document.getElementById('reviewBulkActionBar');
+            if (!bar) return;
+            document.getElementById('selectedReviewCount').textContent = count;
+            bar.style.display = count > 0 ? 'flex' : 'none';
+        }
+
+        window.clearReviewSelection = function() {
+            selectedReviewCodes.clear();
+            document.querySelectorAll('.review-checkbox').forEach(cb => {
+                cb.checked = false;
+                cb.closest('tr').classList.remove('row-selected');
+            });
+            const allCb = document.getElementById('selectAllReviewCheckbox');
+            if (allCb) allCb.checked = false;
+            updateReviewBulkBar();
+        };
+
+        // ── ينقلك لتبويب سجلات الدخول مع فلترة فورية على هذا الكود ──
+        window.viewCodeLoginLogs = function(code) {
+            const tabBtn = Array.from(document.querySelectorAll('.tab-btn'))
+                .find(b => b.getAttribute('onclick') && b.getAttribute('onclick').includes("'loginlogs'"));
+            if (tabBtn) window.switchTab('loginlogs', tabBtn);
+            setTimeout(() => {
+                const searchInput = document.getElementById('loginLogsSearch');
+                if (searchInput) {
+                    searchInput.value = code;
+                    renderLoginLogsTable();
+                }
+            }, 50);
+        };
+
+        window.resetReviewDevice = function(code, desc, fromStudents) {
+            const isStudent = fromStudents === true || fromStudents === 'true';
+            const path = isStudent ? `students/${code}/deviceId` : `reviewDevices/${code}/deviceId`;
+            const warnExtra = isStudent ? '\n⚠️ ملحوظة: هذا الكود هو أيضاً كود طالب — الـ Reset ده هيفتح دخول الطالب العادي كمان، مش بس المراجعة.' : '';
+            if (!confirm(`📱 هتعمل Reset للجهاز المسجل على كود "${code}" (${desc})؟\nأي طالب هيقدر يدخل بيه من جهاز جديد بعد كده.${warnExtra}`)) return;
+            remove(ref(db, path))
+                .then(() => showToast(`📱 تم فتح الكود لجهاز جديد — ${code}`, 'success'))
+                .catch(err => alert('❌ خطأ: ' + err.message));
+        };
+
+        // ── يحول كود مراجعة لـ target path صحيح (students أو reviewDevices) ──
+        function reviewCodeToResetTarget(code) {
+            const info = getUnifiedDeviceInfo(code);
+            const hasDevice = !!(info && info.deviceId);
+            const fromStudents = !!(info && info.fromStudents);
+            return { code, hasDevice, path: fromStudents ? `students/${code}/deviceId` : `reviewDevices/${code}/deviceId` };
+        }
+
+        // ===== Bulk Reset لكودات المراجعة المحددة بس =====
+        window.bulkResetReviewDevice = function() {
+            if (selectedReviewCodes.size === 0) return;
+            const targets = Array.from(selectedReviewCodes).map(reviewCodeToResetTarget).filter(t => t.hasDevice);
+            if (targets.length === 0) {
+                showToast('ℹ️ مفيش أي كود من المحددين عنده جهاز مربوط حاليًا', 'warning');
+                return;
+            }
+            if (!confirm(`📱 هتعمل Reset لأجهزة ${targets.length} كود مراجعة (من أصل ${selectedReviewCodes.size} محدد)؟`)) return;
+            const promises = targets.map(t => remove(ref(db, t.path)));
+            Promise.all(promises)
+                .then(() => {
+                    showToast(`📱 تم فتح ${promises.length} كود لأجهزة جديدة!`, 'success');
+                    selectedReviewCodes.clear();
+                    updateReviewBulkBar();
+                })
+                .catch(err => alert('❌ خطأ: ' + err.message));
+        };
+
+        // ===== Reset All — كل كودات المراجعة دفعة واحدة =====
+        window.resetAllReviewDevices = function() {
+            const uniqueCodes = Array.from(new Set(allReviewCodesFlat.map(x => x.code)));
+            const targets = uniqueCodes.map(reviewCodeToResetTarget).filter(t => t.hasDevice);
+            if (targets.length === 0) {
+                showToast('ℹ️ مفيش أي كود مراجعة مربوط بجهاز حاليًا', 'warning');
+                return;
+            }
+            const typed = prompt(`⚠️ هتعمل Reset لأجهزة كل كودات المراجعة دفعة واحدة (${targets.length} كود)!\n\nاكتب "تأكيد" (بدون علامات) عشان تكمل:`);
+            if (typed === null) return;
+            if (typed.trim() !== 'تأكيد') { showToast('❌ لم يتم كتابة "تأكيد" بشكل صحيح — تم الإلغاء', 'warning'); return; }
+            const promises = targets.map(t => remove(ref(db, t.path)));
+            Promise.all(promises)
+                .then(() => showToast(`📱 تم فتح ${promises.length} كود لجميع كودات المراجعة!`, 'success'))
+                .catch(err => alert('❌ خطأ: ' + err.message));
+        };
 
     </script>
 
@@ -2515,6 +2780,24 @@ ${profileLink}`;
         }
         .notif-item-time { font-size: 0.7rem; color: #aaa; }
 
+        /* ===== Suspicion Tag (IP comparison) ===== */
+        .suspicion-tag {
+            display: inline-flex; align-items: center;
+            padding: 2px 9px;
+            border-radius: 10px;
+            font-size: 0.75rem;
+            font-weight: 700;
+            white-space: nowrap;
+        }
+        .suspicion-tag.low {
+            background: #fff8e1;
+            color: #b8860b;
+        }
+        .suspicion-tag.high {
+            background: #fde8e8;
+            color: #c0392b;
+        }
+
         .container { max-width: 1600px; margin: 0 auto; padding: 1.5rem 2rem; }
 
         .stats-grid {
@@ -2669,12 +2952,27 @@ ${profileLink}`;
             animation: slideDown 0.2s ease;
         }
 
+        #reviewBulkActionBar {
+            display: none;
+            align-items: center;
+            gap: 0.75rem;
+            flex-wrap: wrap;
+            background: linear-gradient(135deg, var(--primary), var(--primary-light));
+            color: white;
+            padding: 0.85rem 1.5rem;
+            border-radius: 12px;
+            margin: 1rem 1rem 0;
+            box-shadow: 0 4px 15px rgba(128,0,0,0.25);
+            animation: slideDown 0.2s ease;
+        }
+
         @keyframes slideDown {
             from { opacity: 0; transform: translateY(-10px); }
             to   { opacity: 1; transform: translateY(0); }
         }
 
-        #bulkActionBar .bulk-label {
+        #bulkActionBar .bulk-label,
+        #reviewBulkActionBar .bulk-label {
             font-weight: 700;
             font-size: 0.95rem;
             flex: 1;
@@ -4266,6 +4564,9 @@ ${profileLink}`;
             <button class="tab-btn" onclick="switchTab('loginlogs', this)">
                 <i class="fas fa-clipboard-list"></i> سجلات الدخول
             </button>
+            <button class="tab-btn" onclick="switchTab('reviewcodes', this)">
+                <i class="fas fa-redo"></i> كودات المراجعة
+            </button>
         </div>
 
         <!-- Students Tab -->
@@ -4317,11 +4618,19 @@ ${profileLink}`;
                 <button class="btn-bulk success" onclick="bulkUnban()">
                     <i class="fas fa-unlock"></i> تفعيل الكل
                 </button>
+                <button class="btn-bulk" style="background:#6c3483;color:#fff" onclick="bulkResetDevice()">
+                    <i class="fas fa-mobile-screen-button"></i> Reset الأجهزة المحددة
+                </button>
                 <button class="btn-bulk copy" onclick="copyCodes()">
                     <i class="fas fa-copy"></i> نسخ الأكواد
                 </button>
                 <button class="btn-bulk clear" onclick="clearSelection()">
                     <i class="fas fa-times"></i> إلغاء التحديد
+                </button>
+            </div>
+            <div style="display:flex;justify-content:flex-end;padding:0.5rem 1rem 0">
+                <button class="btn-secondary" style="border-color:#dc3545;color:#dc3545" onclick="resetAllStudentDevices()">
+                    <i class="fas fa-mobile-screen-button"></i> Reset كل الأجهزة (كل الطلاب)
                 </button>
             </div>
             <div style="overflow-x:auto">
@@ -4570,11 +4879,57 @@ ${profileLink}`;
                             <th>IP</th>
                             <th>الجهاز</th>
                             <th>المتصفح</th>
+                            <th>الشبهة</th>
                             <th>الوقت</th>
                         </tr>
                     </thead>
                     <tbody id="loginLogsBody">
-                        <tr><td colspan="7" style="text-align:center;padding:3rem;color:#888">
+                        <tr><td colspan="8" style="text-align:center;padding:3rem;color:#888">
+                            <i class="fas fa-spinner fa-spin"></i> جاري التحميل...
+                        </td></tr>
+                    </tbody>
+                </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Review Codes Tab -->
+        <div id="tab-reviewcodes" style="display:none">
+            <div class="controls">
+                <div class="search-box">
+                    <i class="fas fa-search"></i>
+                    <input type="text" id="reviewCodesSearch" placeholder="ابحث بالكود أو وصف المراجعة..." oninput="renderReviewCodesTable()">
+                </div>
+                <button class="btn-secondary" style="border-color:#dc3545;color:#dc3545" onclick="resetAllReviewDevices()">
+                    <i class="fas fa-mobile-screen-button"></i> Reset كل الأجهزة (كل كودات المراجعة)
+                </button>
+            </div>
+
+            <div class="table-card">
+                <!-- Bulk Action Bar -->
+                <div id="reviewBulkActionBar" style="display:none">
+                    <span class="bulk-label">✅ تم تحديد <span id="selectedReviewCount">0</span> كود</span>
+                    <button class="btn-bulk" style="background:#6c3483;color:#fff" onclick="bulkResetReviewDevice()">
+                        <i class="fas fa-mobile-screen-button"></i> Reset الأجهزة المحددة
+                    </button>
+                    <button class="btn-bulk clear" onclick="clearReviewSelection()">
+                        <i class="fas fa-times"></i> إلغاء التحديد
+                    </button>
+                </div>
+                <div style="overflow-x:auto">
+                <table>
+                    <thead>
+                        <tr>
+                            <th><input type="checkbox" id="selectAllReviewCheckbox" onchange="toggleSelectAllReview(this.checked)" title="تحديد الكل"></th>
+                            <th>المراجعة</th>
+                            <th>الكود</th>
+                            <th>IP</th>
+                            <th>حالة الجهاز</th>
+                            <th>إجراءات</th>
+                        </tr>
+                    </thead>
+                    <tbody id="reviewCodesBody">
+                        <tr><td colspan="6" style="text-align:center;padding:3rem;color:#888">
                             <i class="fas fa-spinner fa-spin"></i> جاري التحميل...
                         </td></tr>
                     </tbody>
