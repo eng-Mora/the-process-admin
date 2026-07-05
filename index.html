@@ -2134,26 +2134,125 @@ ${profileLink}`;
             } catch(e) { return '—'; }
         }
 
+        // ── PWA Install Prompt (لازم نلقطه عشان نقدر نظهر زرار "ثبّت التطبيق")
+        // تثبيت التطبيق شرط أساسي عشان Chrome يسمح بـ periodicSync أصلاً
+        let deferredInstallPrompt = null;
+        window.addEventListener('beforeinstallprompt', (e) => {
+            e.preventDefault();
+            deferredInstallPrompt = e;
+            const isStandalone = window.matchMedia('(display-mode: standalone)').matches;
+            if (!isStandalone) document.getElementById('installAppBtn').style.display = 'flex';
+        });
+        window.triggerInstallPrompt = async function() {
+            if (!deferredInstallPrompt) return;
+            deferredInstallPrompt.prompt();
+            await deferredInstallPrompt.userChoice;
+            deferredInstallPrompt = null;
+            document.getElementById('installAppBtn').style.display = 'none';
+        };
+        window.addEventListener('appinstalled', () => {
+            document.getElementById('installAppBtn').style.display = 'none';
+            setTimeout(refreshBgSyncStatus, 1000);
+        });
+
+        // ── حالة الإشعارات الخلفية (لتشخيص المشكلة، مش لضمان فورية 100%) ──
+        let bgSyncStatus = { periodicSyncSupported: false, permission: 'unknown', registered: false, lastCheck: null };
+
+        async function refreshBgSyncStatus() {
+            bgSyncStatus.periodicSyncSupported = 'periodicSync' in (swRegistration || {});
+            if (bgSyncStatus.periodicSyncSupported) {
+                try {
+                    const s = await navigator.permissions.query({ name: 'periodic-background-sync' });
+                    bgSyncStatus.permission = s.state;
+                    if (s.state === 'granted') {
+                        await swRegistration.periodicSync.register('check-blocked', { minInterval: 30000 });
+                        const tags = await swRegistration.periodicSync.getTags();
+                        bgSyncStatus.registered = tags.includes('check-blocked');
+                    } else {
+                        bgSyncStatus.registered = false;
+                    }
+                } catch (e) {
+                    bgSyncStatus.permission = 'error';
+                    bgSyncStatus.registered = false;
+                }
+            }
+            renderBgSyncStatus();
+        }
+
+        function renderBgSyncStatus() {
+            const btn = document.getElementById('bgSyncStatusBtn');
+            btn.classList.remove('status-ok', 'status-warn', 'status-off');
+            let statusClass, lines;
+            const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+            const lastCheckStr = bgSyncStatus.lastCheck ? formatLogTime(bgSyncStatus.lastCheck) : 'لسه محصلش';
+
+            if (isIOS) {
+                statusClass = 'status-off';
+                lines = `<b>⚪ الإشعارات الخلفية غير متاحة</b>
+                    iOS Safari مش بيدعم إشعارات والتطبيق مقفول تمامًا.<br>
+                    الإشعارات هتوصلك فقط والتطبيق مفتوح أو مصغّر في الخلفية.`;
+            } else if (bgSyncStatus.registered) {
+                statusClass = 'status-ok';
+                lines = `<b>🟢 الإشعارات الخلفية مفعّلة</b>
+                    آخر فحص خلفي: ${lastCheckStr}<br>
+                    ملاحظة: التوقيت الفعلي بيقرره المتصفح (ممكن يكون أبعد من 30 ثانية) بناءً على استخدامك للتطبيق وحالة الشبكة والبطارية.`;
+            } else if (bgSyncStatus.permission === 'granted') {
+                statusClass = 'status-warn';
+                lines = `<b>🟡 الإذن موجود بس التسجيل لسه مش تمّ</b>
+                    جرّب تفتح التطبيق وتستخدمه أكتر، الفحص هيتفعل تلقائي.`;
+            } else if (!bgSyncStatus.periodicSyncSupported) {
+                statusClass = 'status-off';
+                lines = `<b>🔴 المتصفح ده مش بيدعم الإشعارات الخلفية</b>
+                    استخدم Chrome على أندرويد للحصول على إشعارات والتطبيق مقفول.`;
+            } else {
+                statusClass = 'status-off';
+                lines = `<b>🔴 الإشعارات الخلفية غير مفعّلة</b>
+                    السبب الأشهر: التطبيق لسه مش متثبت (Add to Home Screen) أو مستخدم قليل.<br>
+                    ثبّت التطبيق من الزرار بجنب واستخدمه شوية، الإذن بيتمنح تلقائي بعد كده.`;
+            }
+            btn.classList.add(statusClass);
+            document.getElementById('bgSyncPanel').innerHTML = lines;
+        }
+
+        window.toggleBgSyncPanel = function() {
+            const panel = document.getElementById('bgSyncPanel');
+            const willShow = panel.style.display === 'none';
+            panel.style.display = willShow ? 'block' : 'none';
+            if (willShow) {
+                renderBgSyncStatus();
+                if (swRegistration && swRegistration.active) {
+                    swRegistration.active.postMessage({ type: 'GET_LAST_CHECK' });
+                }
+            }
+        };
+        document.addEventListener('click', (e) => {
+            const panel = document.getElementById('bgSyncPanel');
+            if (panel.style.display === 'block' && !e.target.closest('#bgSyncPanel') && !e.target.closest('#bgSyncStatusBtn')) {
+                panel.style.display = 'none';
+            }
+        });
+
         // ── PWA Service Worker Registration ──
         let swRegistration = null;
         if ('serviceWorker' in navigator) {
             navigator.serviceWorker.register('sw.js', { scope: './' })
                 .then(reg => {
                     swRegistration = reg;
-                    // Periodic Sync لو مدعوم (Android Chrome)
-                    if ('periodicSync' in reg) {
-                        navigator.permissions.query({ name: 'periodic-background-sync' }).then(s => {
-                            if (s.state === 'granted') {
-                                reg.periodicSync.register('check-blocked', { minInterval: 30000 }).catch(() => {});
-                            }
-                        }).catch(() => {});
-                    }
-                    // Fallback: TICK كل 30 ثانية لما الصفحة مفتوحة
+                    refreshBgSyncStatus();
+                    // Fallback: TICK كل 30 ثانية لما الصفحة مفتوحة (بيغطي حالة الصفحة مفتوحة/مصغّرة بس)
                     setInterval(() => {
                         if (reg.active) reg.active.postMessage({ type: 'TICK' });
                     }, 30000);
                 })
                 .catch(err => console.warn('SW error:', err));
+
+            navigator.serviceWorker.addEventListener('message', (e) => {
+                if (e.data && e.data.type === 'CHECK_DONE') {
+                    bgSyncStatus.lastCheck = e.data.info.at;
+                    if (e.data.info.error) console.warn('Background check error:', e.data.info.error);
+                    if (document.getElementById('bgSyncPanel').style.display === 'block') renderBgSyncStatus();
+                }
+            });
         }
 
         // طلب إذن الإشعارات من المتصفح أول ما الأدمن يفتح الصفحة
@@ -2709,6 +2808,37 @@ ${profileLink}`;
             transition: background 0.3s;
         }
         .logout-btn:hover { background: rgba(255,255,255,0.25); }
+
+        /* ===== Install App Button ===== */
+        .install-app-btn {
+            display: flex; align-items: center; gap: 6px;
+            background: #fff; color: #800000; border: none;
+            border-radius: 20px; padding: 6px 14px; font-size: 0.8rem;
+            font-weight: 700; cursor: pointer; white-space: nowrap;
+        }
+        .install-app-btn:hover { background: #f0f0f0; }
+
+        /* ===== Background Sync Status ===== */
+        .bgsync-status-btn {
+            width: 38px; height: 38px; border-radius: 50%;
+            background: rgba(255,255,255,0.18); border: none; color: #fff;
+            font-size: 1rem; cursor: pointer; position: relative;
+        }
+        .bgsync-status-btn::after {
+            content: ''; position: absolute; top: 4px; right: 4px;
+            width: 9px; height: 9px; border-radius: 50%; background: #999;
+            border: 2px solid #800000;
+        }
+        .bgsync-status-btn.status-ok::after   { background: #2ecc71; }
+        .bgsync-status-btn.status-warn::after { background: #f39c12; }
+        .bgsync-status-btn.status-off::after  { background: #e74c3c; }
+        .bgsync-panel {
+            position: absolute; top: 46px; left: 0; z-index: 200;
+            background: #fff; color: #333; border-radius: 10px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.25); padding: 14px 16px;
+            width: 260px; font-size: 0.82rem; line-height: 1.6; text-align: right;
+        }
+        .bgsync-panel b { display: block; margin-bottom: 4px; }
 
         /* ===== Notification Bell ===== */
         .notif-bell-wrap { position: relative; }
@@ -4525,6 +4655,13 @@ ${profileLink}`;
         <div class="header-title">🛡️ لوحة تحكم <span>The Process</span></div>
         <div class="header-right">
             <div class="notif-bell-wrap" id="notifBellWrap">
+                <button class="bgsync-status-btn" id="bgSyncStatusBtn" onclick="toggleBgSyncPanel()" title="حالة الإشعارات الخلفية">
+                    <i class="fas fa-satellite-dish"></i>
+                </button>
+                <div class="bgsync-panel" id="bgSyncPanel" style="display:none"></div>
+                <button class="install-app-btn" id="installAppBtn" style="display:none" onclick="triggerInstallPrompt()" title="ثبّت التطبيق">
+                    <i class="fas fa-download"></i> ثبّت التطبيق
+                </button>
                 <button class="notif-bell-btn" onclick="toggleNotifDropdown()" title="محاولات دخول مرفوضة">
                     <i class="fas fa-bell"></i>
                     <span class="notif-badge" id="notifBadge" style="display:none">0</span>
