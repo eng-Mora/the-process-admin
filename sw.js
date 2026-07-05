@@ -10,10 +10,19 @@ self.addEventListener('activate', (e) => e.waitUntil(clients.claim()));
 // ── Firebase polling كل 30 ثانية في الخلفية ──
 let lastBlockedIds = null; // null = أول تشغيل، مش هنبعت إشعارات للقديم
 
-async function checkBlocked() {
+let lastCheckInfo = { at: 0, source: null, error: null };
+
+async function notifyClientsOfCheck() {
+    const clientsList = await self.clients.matchAll({ includeUncontrolled: true });
+    clientsList.forEach(c => c.postMessage({ type: 'CHECK_DONE', info: lastCheckInfo }));
+}
+
+async function checkBlocked(source) {
     try {
         const res  = await fetch(`${DB_URL}/blockedAttempts.json`);
         const data = await res.json();
+        lastCheckInfo = { at: Date.now(), source, error: null };
+        await notifyClientsOfCheck();
         if (!data) return;
 
         const currentIds = new Set();
@@ -51,17 +60,21 @@ async function checkBlocked() {
         }
 
         lastBlockedIds = currentIds;
-    } catch (e) { /* network error — ignore */ }
+    } catch (e) {
+        lastCheckInfo = { at: Date.now(), source, error: String(e) };
+        await notifyClientsOfCheck();
+    }
 }
 
-// ── Periodic polling (كل 30 ثانية) ──
+// ── Periodic polling (الفترة الفعلية بيقررها المتصفح حسب الاستخدام) ──
 self.addEventListener('periodicsync', (e) => {
-    if (e.tag === 'check-blocked') e.waitUntil(checkBlocked());
+    if (e.tag === 'check-blocked') e.waitUntil(checkBlocked('periodicsync'));
 });
 
 // ── Fallback: setInterval من الصفحة ──
 self.addEventListener('message', (e) => {
-    if (e.data && e.data.type === 'TICK') checkBlocked();
+    if (e.data && e.data.type === 'TICK') checkBlocked('tick');
+    if (e.data && e.data.type === 'GET_LAST_CHECK') notifyClientsOfCheck();
 
     if (e.data && e.data.type === 'SHOW_NOTIFICATION') {
         const { title, body, tag } = e.data;
